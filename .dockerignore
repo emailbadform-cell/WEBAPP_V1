@@ -1,0 +1,5 @@
+__pycache__
+*.pyc
+v10_live_research_log.csv
+*.pem
+.env
