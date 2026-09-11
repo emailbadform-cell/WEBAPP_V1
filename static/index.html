@@ -14,7 +14,7 @@
 </style>
 </head>
 <body><div class="wrap">
-<div class="top"><div><div class="brand">BTC15M DECISION TERMINAL</div><div class="sub">V2.5 web interface · BRTI + Chart + Decision + TR + MP + Order Flow + Multi-Exchange OF</div></div><div id="status" class="pill">Connecting…</div></div>
+<div class="top"><div><div class="brand">BTC15M DECISION TERMINAL</div><div class="sub">V2.5.1 web interface · BRTI + Chart + Decision + TR + MP + Order Flow + Multi-Exchange OF</div></div><div id="status" class="pill">Connecting…</div></div>
 <div id="error" class="error"></div>
 <div class="card hero">
   <div class="metric"><div class="k">Contract</div><div class="v small" id="ticker">—</div></div>
@@ -208,7 +208,15 @@ $('prediction').textContent=c.prediction;cls($('prediction'),c.prediction);$('de
 [['t1',trend(s.m1_trend)],['t5',trend(s.m5_trend)],['t15',trend(s.m15_trend)]].forEach(([id,v])=>{$(id).textContent=v;cls($(id),v)});$('atr').textContent=money(s.atr1m_14);$('ph').textContent=money(s.protected_high);$('pl').textContent=money(s.protected_low);$('seq').textContent=s.dev15_hh_then_ll?'HH→LL':s.dev15_ll_then_hh?'LL→HH':'none';$('bos').textContent=`BOS ${s.m15_bos_up}/${s.m15_bos_dn} · CHOCH ${s.m15_choch_up}/${s.m15_choch_dn}`;
 $('mpdir').textContent=mp.direction;cls($('mpdir'),mp.direction);$('mpstrength').textContent=mp.strength;cls($('mpstrength'),mp.strength);$('mpnear').textContent=money(mp.near);$('mpbase').textContent=money(mp.base);$('mpext').textContent=money(mp.extended);$('mpex').textContent=mp.exhaustion;cls($('mpex'),mp.exhaustion);$('mpaction').textContent=mp.action;cls($('mpaction'),mp.action);$('mpinv').textContent=money(mp.invalidation);$('mpprog').textContent=mp.progress?mp.progress.progress_pct.toFixed(0)+'%':'—';$('mprem').textContent=mp.progress?money(mp.progress.remaining_to_base):'—';
 $('trstatus').textContent=tr.status;cls($('trstatus'),tr.status);$('trscore').textContent=Number(tr.tr_score).toFixed(2);$('trcross').textContent=pct(tr.cross_estimate);$('trraw').textContent=pct(tr.raw_cross_estimate);$('trtravel').textContent=money(tr.travel_budget);$('trrole').textContent=tr.role||'—';
-$('trofstate').textContent=trof.state||'NEUTRAL';cls($('trofstate'),trof.state==='TOWARD TARGET'?'ABOVE':(trof.state==='AWAY FROM TARGET'?'BELOW':''));
+$('trofstate').textContent=trof.state||'NEUTRAL';
+let trSide=(tr.current_side||((m.distance||0)>=0?'ABOVE':'BELOW'));
+let trOfColor='';
+if(trof.state==='TOWARD TARGET'){
+  trOfColor=(trSide==='ABOVE')?'BELOW':'ABOVE';
+}else if(trof.state==='AWAY FROM TARGET'){
+  trOfColor=(trSide==='ABOVE')?'ABOVE':'BELOW';
+}
+cls($('trofstate'),trOfColor);
 $('trofscore').textContent=trof.toward_score==null?'—':Number(trof.toward_score).toFixed(3);
 $('ofearly').textContent=oe.signal||'NONE';cls($('ofearly'),(oe.signal||'').includes('BUY')?'ABOVE':((oe.signal||'').includes('SELL')?'BELOW':''));
 $('ofearlyscore').textContent=oe.score==null?'—':Number(oe.score).toFixed(3);
