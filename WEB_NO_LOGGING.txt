@@ -1,2 +1,0 @@
-This web build has V10.11 research logging removed/disabled.
-Live chart, Decision Signal, TR, MP and Order Flow functionality is intended to remain available.
