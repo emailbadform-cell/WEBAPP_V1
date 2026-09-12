@@ -1,0 +1,6 @@
+{
+  "version": "V2.9",
+  "core": "V10.25",
+  "logging": false,
+  "deployment": "replace full package files; keep secrets only in Render environment/secret file"
+}
