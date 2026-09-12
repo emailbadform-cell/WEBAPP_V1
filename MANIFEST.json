@@ -1,0 +1,14 @@
+{
+  "version": "V2.15 / V10.31",
+  "generated_utc": "2026-09-12",
+  "files": 64,
+  "features": [
+    "execution workflow",
+    "Kalshi bid/ask multiplier research",
+    "exhaustion score",
+    "reversal confirmation",
+    "private browser position",
+    "private trade journal CSV export",
+    "MFE/MAE-ready research fields"
+  ]
+}
