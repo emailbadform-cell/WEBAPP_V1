@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-BTC15M AUTO LIVE V10.23 — CRYPTO.COM 5-VENUE OF RESEARCH
+BTC15M AUTO LIVE V10.25 — FAST BRTI + ROLLOVER + FLIP + OF RESPONSE RESEARCH
 ===========================================
 
 Predicts whether the active Kalshi KXBTC15M contract will settle ABOVE or BELOW
@@ -67,6 +67,10 @@ import joblib
 import numpy as np
 import pandas as pd
 import requests
+try:
+    import websocket
+except Exception:
+    websocket=None
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 from sklearn.ensemble import ExtraTreesClassifier, RandomForestClassifier, HistGradientBoostingClassifier, GradientBoostingClassifier
@@ -82,6 +86,8 @@ MODEL_FILE = HERE / "live_model_bundle.joblib"
 
 KALSHI_BASE = "https://external-api.kalshi.com"
 API_ROOT = "/trade-api/v2"
+KALSHI_WS_URL = "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
+KALSHI_WS_PATH = "/trade-api/ws/v2"
 COINBASE_CANDLES = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 COINBASE_BOOK = "https://api.exchange.coinbase.com/products/BTC-USD/book"
 MULTI_EXCHANGE_URLS={
@@ -262,6 +268,16 @@ def _auth_get(path,params=None,timeout=20):
     r.raise_for_status()
     return r.json()
 
+
+def _auth_headers_full_path(method, full_path):
+    """Kalshi auth for paths outside REST /trade-api/v2, notably /trade-api/ws/v2."""
+    key_id=os.getenv("KALSHI_API_KEY_ID","").strip()
+    if not key_id: raise RuntimeError("KALSHI_API_KEY_ID is not set.")
+    ts=str(int(time.time()*1000))
+    msg=(ts+method.upper()+full_path).encode()
+    sig=_load_private_key().sign(msg,padding.PSS(mgf=padding.MGF1(hashes.SHA256()),salt_length=padding.PSS.DIGEST_LENGTH),hashes.SHA256())
+    return {"KALSHI-ACCESS-KEY":key_id,"KALSHI-ACCESS-TIMESTAMP":ts,"KALSHI-ACCESS-SIGNATURE":base64.b64encode(sig).decode(),"User-Agent":"btc15m-v10.25/1.0"}
+
 def parse_dt(x):
     if not x: return None
     t=pd.to_datetime(x,utc=True,errors="coerce")
@@ -283,6 +299,23 @@ def fetch_active_kalshi_market(now=None):
     if not candidates: raise RuntimeError("No currently-open KXBTC15M contract found.")
     close,m,target=sorted(candidates,key=lambda x:x[0])[0]
     return {"ticker":m.get("ticker"),"target":target,"close_time":close,"open_time":parse_dt(m.get("open_time"))}
+
+
+def fetch_next_kalshi_market(after_close, now=None):
+    """Prefetch the next listed KXBTC15M contract before the current one expires."""
+    now=now or datetime.now(timezone.utc)
+    data=_public_get("/markets",{"series_ticker":"KXBTC15M","limit":100})
+    candidates=[]
+    for m in data.get("markets",[]):
+        if "KXBTC15M" not in str(m.get("ticker","")): continue
+        close=parse_dt(m.get("close_time") or m.get("expiration_time")); op=parse_dt(m.get("open_time"))
+        target=m.get("floor_strike",m.get("functional_strike"))
+        try: target=float(target)
+        except Exception: continue
+        if close and close>after_close and (op is None or op<=close): candidates.append((close,m,target,op))
+    if not candidates: return None
+    close,m,target,op=sorted(candidates,key=lambda x:x[0])[0]
+    return {"ticker":m.get("ticker"),"target":target,"close_time":close,"open_time":op}
 
 def _walk(obj):
     if isinstance(obj,dict):
@@ -1062,32 +1095,97 @@ def target_reachability_of_context(r, mof, early=None):
 _MP_TRACKER = {}
 
 def _mp_progress_state(r, mp):
-    """Track progress from the start of the current MP direction for this contract."""
+    """V10.26 projection lifecycle.
+
+    The MP zones are one fixed projection *leg*. When the Base objective is
+    reached, the completed leg is retired immediately and a fresh projection is
+    anchored at the current BRTI using the current structural MP calculation.
+    This prevents Progress from remaining at 100-200% while stale targets stay
+    associated with an already-completed move.
+
+    A structural direction change also starts a new leg immediately. The
+    lifecycle does not assume that a completed leg must continue; it simply
+    re-anchors and lets current structure/developing-move logic determine the
+    next projection.
+    """
     key=str(r.get("ticker","UNKNOWN"))
-    direction=mp["direction"]
+    direction=str(mp.get("structural_direction") or mp.get("direction") or "UP")
     px=float(r["btc"])
-    st=_MP_TRACKER.get(key)
-    if st is None or st.get("direction") != direction:
-        st={
+    qt=r.get("quote_time")
+    quote_key=str(qt) if qt is not None else f"{px:.8f}"
+
+    def _fresh(previous=None, reason="NEW PROJECTION"):
+        prev_leg=int((previous or {}).get("leg_id",0))
+        completed=int((previous or {}).get("completed_legs",0))
+        return {
             "direction":direction,
             "anchor":px,
             "near":float(mp["near"]),
             "base":float(mp["base"]),
             "extended":float(mp["extended"]),
+            "leg_id":prev_leg+1,
+            "completed_legs":completed,
+            "last_event":reason,
+            "last_event_quote":quote_key,
         }
+
+    st=_MP_TRACKER.get(key)
+    if st is None:
         _MP_TRACKER.clear()
+        st=_fresh(None,"NEW PROJECTION")
         _MP_TRACKER[key]=st
+    elif st.get("direction") != direction:
+        prior=dict(st)
+        st=_fresh(prior,"DIRECTION CHANGE — REPROJECTED")
+        _MP_TRACKER.clear(); _MP_TRACKER[key]=st
+
     sign=1.0 if direction=="UP" else -1.0
-    anchor=float(st["anchor"]); base=float(st["base"]); near=float(st["near"]); ext=float(st["extended"])
-    total=max(1e-9, sign*(base-anchor))
-    traveled=max(0.0, sign*(px-anchor))
-    progress=max(0.0,min(2.0,traveled/total))
-    remaining=max(0.0, sign*(base-px))
+    anchor=float(st["anchor"]); base=float(st["base"])
+    total=sign*(base-anchor)
+
+    # A malformed/stale zone should never be allowed to survive.
+    if total <= 1e-9:
+        prior=dict(st)
+        st=_fresh(prior,"INVALID ZONE — REPROJECTED")
+        _MP_TRACKER.clear(); _MP_TRACKER[key]=st
+        anchor=float(st["anchor"]); base=float(st["base"])
+        total=max(1e-9,sign*(base-anchor))
+
+    traveled_signed=sign*(px-anchor)
+    raw_progress=traveled_signed/total
+
+    # Base = completion of the current projection leg. Re-arm immediately.
+    # Historical V10.26 testing showed post-base continuation was ~coin-flip,
+    # so completion does not imply another same-direction extension; instead
+    # we ask current MP structure for an entirely fresh leg.
+    if raw_progress >= 1.0:
+        prior=dict(st)
+        prior["completed_legs"]=int(prior.get("completed_legs",0))+1
+        st=_fresh(prior,"BASE ACHIEVED — REPROJECTED")
+        st["completed_legs"]=int(prior["completed_legs"])
+        _MP_TRACKER.clear(); _MP_TRACKER[key]=st
+        anchor=float(st["anchor"]); base=float(st["base"])
+        total=max(1e-9,sign*(base-anchor))
+        traveled_signed=0.0
+        raw_progress=0.0
+
+    progress=max(0.0,min(1.0,raw_progress))
+    remaining=max(0.0,sign*(base-px))
+    status=st.get("last_event","ACTIVE") if st.get("last_event_quote")==quote_key else "ACTIVE"
     return {
-        "anchor":anchor,"near":near,"base":base,"extended":ext,
-        "progress":progress,"progress_pct":100.0*progress,
-        "traveled":traveled,"remaining_to_base":remaining,
+        "anchor":float(st["anchor"]),
+        "near":float(st["near"]),
+        "base":float(st["base"]),
+        "extended":float(st["extended"]),
+        "progress":float(progress),
+        "progress_pct":100.0*float(progress),
+        "traveled":max(0.0,float(traveled_signed)),
+        "remaining_to_base":float(remaining),
+        "projection_status":status,
+        "leg_id":int(st.get("leg_id",1)),
+        "completed_legs":int(st.get("completed_legs",0)),
     }
+
 
 def move_projection(r):
     """Chart-only Move Projection (MP).
@@ -1314,7 +1412,7 @@ def _status_color_word(word):
     if any(x in w for x in ("MARGINAL","NEUTRAL","PROTECT","MEDIUM","WEAK")): return "YELLOW"
     return "WHITE"
 
-RESEARCH_LOG_FILE = HERE / "BTC15M_V10_23_CRYPTOCOM_5VENUE_OF_RESEARCH_LOG.csv"
+RESEARCH_LOG_FILE = HERE / "BTC15M_V10_27_FORWARD_VALIDATED_OF_FLIP_MP_RESEARCH_LOG.csv"
 _RESEARCH_LAST_KEY = None
 
 def decision_signal(r, seconds_left):
@@ -1987,6 +2085,330 @@ def _render_frame(text):
     sys.stdout.flush()
     _DISPLAY_STATE["lines"]=len(incoming)
 
+
+# ---------------------------------------------------------------------------
+# V10.26 FAST-LIVE / DYNAMIC-MP-LIFECYCLE / OF-PRICE-RESPONSE / DEVELOPING-MOVE / FLIP RESEARCH
+# ---------------------------------------------------------------------------
+_move_projection_v1023 = move_projection
+_research_row_v1023 = _research_row
+_OF_RESPONSE_TRACKER={}
+_FLIP_TRACKER={}
+
+
+def _tick_value_near(ticks, when, tolerance=1.2):
+    if ticks is None or not len(ticks): return None
+    x=ticks.copy(); x['time']=pd.to_datetime(x['time'],utc=True)
+    delta=(x['time']-pd.Timestamp(when)).abs()
+    i=delta.idxmin()
+    if delta.loc[i].total_seconds()>tolerance: return None
+    return float(x.loc[i,'value'])
+
+
+def _attach_micro_price_features(r, ticks):
+    qt=pd.to_datetime(r.get('quote_time'),utc=True,errors='coerce')
+    if pd.isna(qt): return r
+    px=float(r['btc'])
+    for s in (2,5,10):
+        old=_tick_value_near(ticks,qt-pd.Timedelta(seconds=s),tolerance=1.5)
+        d=None if old is None else px-old
+        r[f'micro_delta_{s}s']=d
+        r[f'micro_delta_{s}s_bps']=None if d is None else 10000.0*d/max(px,1e-9)
+    return r
+
+
+def move_projection(r):
+    """V10.26 keeps structural MP, developing-move detection, and dynamic projection lifecycle."""
+    mp=_move_projection_v1023(r)
+    structural=mp.get('direction','UP')
+    b5=_safe_float(r.get('micro_delta_5s_bps')); b10=_safe_float(r.get('micro_delta_10s_bps'))
+    active=0; evidence='QUIET'
+    if b5 is not None and abs(b5)>=0.50:
+        active=1 if b5>0 else -1; evidence='5s BRTI MOVE'
+    elif b10 is not None and abs(b10)>=0.75:
+        active=1 if b10>0 else -1; evidence='10s BRTI MOVE'
+    structural_sign=1 if structural=='UP' else -1
+    if active==0:
+        display=structural; state='STRUCTURAL'
+    elif active==structural_sign:
+        display=structural+' ACTIVE'; state='CONTINUATION ACTIVE'
+    else:
+        display=('UP' if active>0 else 'DOWN')+' DEVELOPING'; state='OPPOSING MOVE DEVELOPING'
+        # Do not flip the structural projection on micro movement alone, but do make the trade state react.
+        if mp.get('action')=='HOLD': mp['action']='PROTECT PROFIT'
+    mp['structural_direction']=structural
+    mp['display_direction']=display
+    mp['developing_state']=state
+    mp['micro_evidence']=evidence
+    mp['micro_5s_bps']=b5; mp['micro_10s_bps']=b10
+    return mp
+
+
+
+def validated_orderflow_research(mof):
+    """Forward-validated OF research composite.
+
+    V10.23 chronological testing favored Crypto.com as the most stable standalone
+    venue. A conservative 60% Crypto.com + 40% Coinbase composite was positive
+    across all tested holdout horizons. This is context only; it never silently
+    overrides Chart or Decision.
+    """
+    venues=(mof or {}).get('venues') or {}
+    cc=_safe_float((venues.get('crypto_com') or {}).get('pressure_score'))
+    cb=_safe_float((venues.get('coinbase') or {}).get('pressure_score'))
+    raw_combined=_safe_float(((mof or {}).get('combined') or {}).get('pressure_score'))
+    if cc is not None and cb is not None:
+        score=0.60*cc+0.40*cb; basis='60% CRYPTO.COM + 40% COINBASE'
+    elif cc is not None:
+        score=cc; basis='CRYPTO.COM ONLY'
+    elif raw_combined is not None:
+        score=raw_combined; basis='5-VENUE FALLBACK'
+    else:
+        score=0.0; basis='NO VALID VENUE'
+    signal='BUY' if score>=0.15 else ('SELL' if score<=-0.15 else 'NEUTRAL')
+    direction='BULLISH' if signal=='BUY' else ('BEARISH' if signal=='SELL' else 'NEUTRAL')
+    return {'score':float(score),'signal':signal,'direction':direction,'basis':basis,
+            'threshold':0.15,'role':'FORWARD-VALIDATED OF CONTEXT — NO DECISION OVERRIDE'}
+
+def of_price_response_research(r, mof, now=None, score_override=None):
+    """Describe whether BRTI is actually responding to current OF pressure; no settlement override."""
+    now=now or datetime.now(timezone.utc); ticker=str(r.get('ticker','UNKNOWN')); px=float(r.get('btc',0.0))
+    c=(mof or {}).get('combined') or {}; score=_safe_float(score_override)
+    if score is None:
+        score=_safe_float(validated_orderflow_research(mof).get('score'))
+    score=score or 0.0
+    sign=1 if score>=0.15 else (-1 if score<=-0.15 else 0)
+    st=_OF_RESPONSE_TRACKER.get(ticker)
+    if sign==0:
+        _OF_RESPONSE_TRACKER[ticker]={'sign':0,'ts':now.timestamp(),'px':px}
+        return {'state':'NEUTRAL','direction':'NEUTRAL','elapsed_s':0.0,'response_bps':0.0,'pressure_score':score,'role':'PRICE RESPONSE TO OF'}
+    if st is None or st.get('sign')!=sign:
+        st={'sign':sign,'ts':now.timestamp(),'px':px}; _OF_RESPONSE_TRACKER[ticker]=st
+    elapsed=max(0.0,now.timestamp()-st['ts']); response_bps=sign*(px-st['px'])/max(px,1e-9)*10000.0
+    direction='BULLISH' if sign>0 else 'BEARISH'
+    if elapsed<2.0: state=f'{direction} PRESSURE — DEVELOPING'
+    elif response_bps>=0.50: state=f'{direction} PRESSURE — PRICE CONFIRMED'
+    elif response_bps<=-0.50: state=f'{direction} PRESSURE — ABSORBED / FAILED'
+    else: state=f'{direction} PRESSURE — PENDING'
+    return {'state':state,'direction':direction,'elapsed_s':elapsed,'response_bps':response_bps,'pressure_score':score,'role':'PRICE RESPONSE TO OF'}
+
+
+
+def mp_of_price_confirmation(mp, of_response):
+    """Connect developing MP to actual price-confirmed OF without flipping structural MP."""
+    mp=mp or {}; o=of_response or {}
+    state=str(o.get('state') or 'NEUTRAL')
+    odir=str(o.get('direction') or 'NEUTRAL')
+    structural=str(mp.get('structural_direction') or mp.get('direction') or 'UP')
+    structural_bull=structural=='UP'
+    price_confirmed='PRICE CONFIRMED' in state
+    failed='ABSORBED / FAILED' in state
+    if price_confirmed:
+        same=(odir=='BULLISH' and structural_bull) or (odir=='BEARISH' and not structural_bull)
+        if same:
+            relation='CONTINUATION CONFIRMED BY OF + PRICE'
+            action=mp.get('action')
+        else:
+            relation='OPPOSING MOVE CONFIRMED BY OF + PRICE'
+            action='PROTECT PROFIT' if mp.get('action')=='HOLD' else mp.get('action')
+    elif failed:
+        relation='OF PRESSURE FAILED — PRICE RESISTING'
+        action=mp.get('action')
+    elif odir!='NEUTRAL':
+        relation='OF PRESSURE AWAITING PRICE'
+        action=mp.get('action')
+    else:
+        relation='NEUTRAL'
+        action=mp.get('action')
+    return {'state':relation,'action_candidate':action,'price_confirmed':price_confirmed,
+            'of_direction':odir,'role':'MP DEVELOPING-MOVE CONFIRMATION'}
+
+def flip_reachthrough_research(r, now=None):
+    """FLIP = after target approach/reach, does BRTI cross through at least once?
+
+    Settlement hold is irrelevant. The $10 band is only an ARMING zone derived
+    from historical sampling. At 5Hz, an actual sign change confirms the cross.
+    """
+    now=now or datetime.now(timezone.utc)
+    ticker=str(r.get('ticker','UNKNOWN')); dist=float(r.get('distance',0.0))
+    sign=1 if dist>=0 else -1
+    st=_FLIP_TRACKER.get(ticker)
+    if st is None:
+        st={'initial_sign':sign,'armed':False,'reached':False,'crossed':False,
+            'arm_ts':None,'reach_ts':None,'min_abs_distance':abs(dist)}
+        _FLIP_TRACKER.clear(); _FLIP_TRACKER[ticker]=st
+    st['min_abs_distance']=min(float(st.get('min_abs_distance',abs(dist))),abs(dist))
+    if not st['armed'] and abs(dist)<=10.0:
+        st['armed']=True; st['arm_ts']=now.timestamp()
+    # <=$1 is a practical same-side "reached" proxy; a sign change is definitive.
+    if not st['reached'] and abs(dist)<=1.0:
+        st['reached']=True; st['reach_ts']=now.timestamp()
+    if sign!=st['initial_sign']:
+        st['armed']=True; st['reached']=True; st['crossed']=True
+        if st.get('reach_ts') is None: st['reach_ts']=now.timestamp()
+    if st['crossed']:
+        state='FLIPPED — CROSS THROUGH CONFIRMED'
+    elif st['reached']:
+        state='TARGET REACHED — FLIP WATCH'
+    elif st['armed']:
+        state='NEAR TARGET — FLIP ARMED'
+    else:
+        state='WAITING FOR TARGET'
+    return {'state':state,'armed':bool(st['armed']),'reached':bool(st['reached']),
+            'crossed':bool(st['crossed']),
+            'initial_side':'ABOVE' if st['initial_sign']>0 else 'BELOW',
+            'min_abs_distance':float(st['min_abs_distance']),
+            'seconds_since_arm':None if st.get('arm_ts') is None else max(0.0,now.timestamp()-st['arm_ts']),
+            'historical_10usd_holdout_context':'12/12 crossed after entering $10 zone in V10.23 holdout',
+            'definition':'reach/approach target then cross through at least once; settlement hold not required'}
+
+class LiveEngine(LiveEngine):
+    """V10.25: 5Hz BRTI WebSocket primary, REST recovery, proactive next-contract prefetch."""
+    def __init__(self,*a,**kw):
+        super().__init__(*a,**kw)
+        self.next_market=None; self.last_market_discovery=0.0
+        self.ws_latest=None; self.ws_status='STARTING'; self.ws_error=None; self.ws_last_received_monotonic=0.0
+        self.last_rollover_info={'mode':'INITIAL','lag_s':None,'switched_at':None,'ticker':None}
+        self.last_processed_ws_ts=None; self.last_rest_fallback=0.0; self.ws_thread=None
+
+    def _switch_market(self,nxt):
+        previous=self.market.get('ticker') if self.market else self.last_ticker
+        was_prefetched=bool(self.next_market and self.next_market.get('ticker')==nxt.get('ticker'))
+        self.market=nxt; self.waiting_for_next=False; self.next_market=None
+        if previous!=nxt.get('ticker'):
+            now=datetime.now(timezone.utc)
+            ref=nxt.get('open_time')
+            lag=None if ref is None else max(0.0,(now-ref).total_seconds())
+            self.last_rollover_info={'mode':'PREFETCH' if was_prefetched else 'DISCOVERY',
+                                     'lag_s':lag,'switched_at':now.isoformat(),'ticker':nxt.get('ticker')}
+            self.last_ticker=nxt.get('ticker')
+            _MP_TRACKER.clear(); _FLIP_TRACKER.clear(); _OF_RESPONSE_TRACKER.clear()
+
+    def _ensure_market(self):
+        now=datetime.now(timezone.utc)
+        if self.market is None:
+            self._switch_market(fetch_active_kalshi_market(now)); return
+        remaining=(self.market['close_time']-now).total_seconds()
+        # Prefetch up to 3 minutes early; rate-limit discovery to once per 5s.
+        if remaining<=180 and self.next_market is None and time.monotonic()-self.last_market_discovery>=5:
+            self.last_market_discovery=time.monotonic()
+            try: self.next_market=fetch_next_kalshi_market(self.market['close_time'],now)
+            except Exception: pass
+        if remaining<=0:
+            if self.next_market and self.next_market['close_time']>now and (self.next_market.get('open_time') is None or self.next_market['open_time']<=now+timedelta(seconds=2)):
+                self._switch_market(self.next_market); return
+            if time.monotonic()-self.last_market_discovery>=0.8:
+                self.last_market_discovery=time.monotonic()
+                try:
+                    self._switch_market(fetch_active_kalshi_market(now)); return
+                except Exception:
+                    pass
+            self.waiting_for_next=True
+            raise RuntimeError('WAITING FOR NEXT KXBTC15M CONTRACT — rapid rollover retry active')
+
+    def _append_live_tick(self, value, ts):
+        row=pd.DataFrame([{'time':pd.to_datetime(ts,utc=True),'value':float(value)}])
+        if self.ticks is None: self.ticks=row
+        else:
+            self.ticks=(pd.concat([self.ticks,row],ignore_index=True).drop_duplicates('time',keep='last').sort_values('time'))
+            cutoff=pd.Timestamp(datetime.now(timezone.utc)-timedelta(hours=7)); self.ticks=self.ticks[self.ticks.time>=cutoff].reset_index(drop=True)
+        self.candles=brti_ticks_to_1m(self.ticks)
+        r=predict_from_data(self.market,self.candles,float(value),'BRTI 5Hz WebSocket',pd.to_datetime(ts,utc=True))
+        r=_attach_micro_price_features(r,self.ticks)
+        r['brti_feed']='WS_5HZ'; r['brti_received_monotonic']=self.ws_last_received_monotonic
+        r['rollover_mode']=self.last_rollover_info.get('mode'); r['rollover_lag_s']=self.last_rollover_info.get('lag_s')
+        r['next_prefetched']=bool(self.next_market); r['next_ticker']=(self.next_market or {}).get('ticker')
+        return r
+
+    def brti_websocket_worker(self):
+        if websocket is None:
+            self.ws_status='UNAVAILABLE'; self.ws_error='websocket-client not installed'; return
+        while self.running:
+            ws=None
+            try:
+                headers=_auth_headers_full_path('GET',KALSHI_WS_PATH)
+                ws=websocket.create_connection(KALSHI_WS_URL,header=[f'{k}: {v}' for k,v in headers.items()],timeout=8,origin=None)
+                ws.send(json.dumps({'id':1,'cmd':'subscribe','params':{'channels':['cfbenchmarks_value_5hz'],'index_ids':['BRTI']}}))
+                self.ws_status='LIVE'; self.ws_error=None
+                while self.running:
+                    raw=ws.recv(); msg=json.loads(raw)
+                    if msg.get('type')!='cfbenchmarks_value_5hz': continue
+                    m=msg.get('msg') or {}
+                    if m.get('index_id')!='BRTI': continue
+                    val=float(m.get('value_usd')); ts_ms=float(m.get('source_ts_ms'))
+                    ts=pd.to_datetime(ts_ms,unit='ms',utc=True)
+                    with self.lock:
+                        self.ws_latest={'value':val,'time':ts,'received_at':m.get('received_at')}
+                        self.ws_last_received_monotonic=time.monotonic(); self.ws_status='LIVE'; self.ws_error=None
+            except Exception as e:
+                self.ws_status='RECONNECTING'; self.ws_error=str(e)
+                time.sleep(1.0)
+            finally:
+                try:
+                    if ws: ws.close()
+                except Exception: pass
+
+    def worker(self):
+        try:
+            self._initialize_brti()
+        except Exception as e:
+            if not self.allow_coinbase_fallback:
+                self._set(error='Initialization failed: '+str(e)); return
+        self.ws_thread=threading.Thread(target=self.brti_websocket_worker,daemon=True); self.ws_thread.start()
+        while self.running:
+            try:
+                self._ensure_market()
+                latest=None
+                with self.lock:
+                    if self.ws_latest: latest=dict(self.ws_latest)
+                if latest is not None:
+                    key=str(latest['time'])
+                    if key!=self.last_processed_ws_ts:
+                        self.last_processed_ws_ts=key
+                        r=self._append_live_tick(latest['value'],latest['time']); self._set(result=r,error=None)
+                stale=(time.monotonic()-self.ws_last_received_monotonic) if self.ws_last_received_monotonic else 999
+                if stale>2.5 and time.monotonic()-self.last_rest_fallback>=1.0:
+                    self.last_rest_fallback=time.monotonic()
+                    try:
+                        r=self._refresh_brti(); r=_attach_micro_price_features(r,self.ticks); r['brti_feed']='REST FALLBACK'; r['rollover_mode']=self.last_rollover_info.get('mode'); r['rollover_lag_s']=self.last_rollover_info.get('lag_s'); r['next_prefetched']=bool(self.next_market); r['next_ticker']=(self.next_market or {}).get('ticker'); self._set(result=r,error=None)
+                    except Exception as e:
+                        self._set(error='BRTI WS stale; REST fallback error: '+str(e))
+            except Exception as e:
+                self._set(error=str(e))
+            time.sleep(0.20)
+
+    def feed_status(self):
+        with self.lock:
+            latest=dict(self.ws_latest) if self.ws_latest else None
+        age=None
+        if latest and latest.get('time') is not None:
+            age=max(0.0,(datetime.now(timezone.utc)-pd.to_datetime(latest['time'],utc=True).to_pydatetime()).total_seconds())
+        return {'mode':self.ws_status,'age_s':age,'error':self.ws_error,'next_ticker':(self.next_market or {}).get('ticker'),'next_prefetched':bool(self.next_market)}
+
+
+def _research_row(r, now, orderflow, multi_exchange=None, multi_orderflow=None):
+    row=_research_row_v1023(r,now,orderflow,multi_exchange,multi_orderflow)
+    mof=multi_orderflow or {}
+    vof=validated_orderflow_research(mof)
+    opr=of_price_response_research(r,mof,now,vof.get('score')); fl=flip_reachthrough_research(r,now); mp=move_projection(r)
+    mpl=_mp_progress_state(r,mp); mplink=mp_of_price_confirmation(mp,opr)
+    qt=pd.to_datetime(r.get('quote_time'),utc=True,errors='coerce')
+    quote_age=None if pd.isna(qt) else max(0.0,(pd.Timestamp(now)-qt).total_seconds())
+    row.update({
+      'research_version':'V10.27',
+      'brti_quote_age_s':quote_age,'rollover_mode':r.get('rollover_mode'),'rollover_lag_s':r.get('rollover_lag_s'),
+      'next_prefetched':r.get('next_prefetched'),'next_ticker':r.get('next_ticker'),
+      'of_validated_signal':vof.get('signal'),'of_validated_direction':vof.get('direction'),
+      'of_validated_score':vof.get('score'),'of_validated_basis':vof.get('basis'),
+      'mp_of_price_state':mplink.get('state'),'mp_of_price_action_candidate':mplink.get('action_candidate'),
+      'brti_feed':r.get('brti_feed'),'micro_delta_2s_bps':r.get('micro_delta_2s_bps'),'micro_delta_5s_bps':r.get('micro_delta_5s_bps'),'micro_delta_10s_bps':r.get('micro_delta_10s_bps'),
+      'mp_structural_direction':mp.get('structural_direction'),'mp_display_direction':mp.get('display_direction'),'mp_developing_state':mp.get('developing_state'),
+      'mp_projection_status':mpl.get('projection_status'),'mp_projection_leg':mpl.get('leg_id'),'mp_projection_completed_legs':mpl.get('completed_legs'),'mp_projection_progress_pct':mpl.get('progress_pct'),
+      'mp_projection_anchor':mpl.get('anchor'),'mp_projection_near':mpl.get('near'),'mp_projection_base':mpl.get('base'),'mp_projection_extended':mpl.get('extended'),
+      'of_price_response_state':opr.get('state'),'of_price_response_bps':opr.get('response_bps'),'of_price_response_elapsed_s':opr.get('elapsed_s'),
+      'flip_state':fl.get('state'),'flip_armed':fl.get('armed'),'flip_reached':fl.get('reached'),'flip_crossed':fl.get('crossed'),'flip_initial_side':fl.get('initial_side'),'flip_min_abs_distance':fl.get('min_abs_distance'),'flip_seconds_since_arm':fl.get('seconds_since_arm')
+    })
+    return row
+
 def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--train",action="store_true")
@@ -2020,9 +2442,9 @@ def main():
             mof,mof_err=eng.multi_orderflow_snapshot()
             if r is None:
                 if err and "No currently-open KXBTC15M contract found" in str(err):
-                    frame="V10.19 — WAITING FOR NEXT KXBTC15M CONTRACT...\nAuto-roll is active; retrying automatically."
+                    frame="V10.27 — WAITING FOR NEXT KXBTC15M CONTRACT...\nAuto-roll is active; retrying automatically."
                 else:
-                    frame="V10.19 initializing BRTI history, chart model, and order flow...\nCountdown will refresh every second once the active contract is loaded."
+                    frame="V10.27 initializing BRTI history, 5Hz feed, chart model, and order flow...\nCountdown will refresh every second once the active contract is loaded."
                     if err: frame += "\nERROR: " + str(err)
             else:
                 _now=datetime.now(timezone.utc)

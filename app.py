@@ -233,7 +233,16 @@ def build_state():
     sec = max(0.0, (r["close_time"] - now).total_seconds())
     tr = core.target_reachability(r["distance"], r["atr1m_14"], sec, r.get("prediction"))
     mp = core.move_projection(r)
-    mp["progress"] = core._mp_progress_state(r, mp)
+    mp_progress = core._mp_progress_state(r, mp)
+    # V2.10: zones and progress now refer to the same projection leg.
+    # When Base is achieved the core immediately re-arms a fresh leg.
+    mp["progress"] = mp_progress
+    mp["near"] = mp_progress["near"]
+    mp["base"] = mp_progress["base"]
+    mp["extended"] = mp_progress["extended"]
+    mp["projection_status"] = mp_progress.get("projection_status")
+    mp["projection_leg"] = mp_progress.get("leg_id")
+    mp["completed_legs"] = mp_progress.get("completed_legs")
     ds = core.decision_signal(r, sec)
     candles = engine.candles
     spark = []
@@ -272,6 +281,11 @@ def build_state():
     of_micro = core.of_micro_bias_research(mof, early)
     mp_of = core.mp_of_context_research(r, mof, early)
     fusion = core.signal_fusion_research(r, mof, early)
+    validated_of = core.validated_orderflow_research(mof)
+    of_response = core.of_price_response_research(r, mof, now, validated_of.get('score'))
+    mp_of_price = core.mp_of_price_confirmation(mp, of_response)
+    flip = core.flip_reachthrough_research(r, now)
+    feed = engine.feed_status() if hasattr(engine, "feed_status") else {}
     display = {
         "structure_15m": core.interpret_15m_structure(r),
         "mp_thesis": core.interpret_mp_thesis(r, mp),
@@ -279,6 +293,10 @@ def build_state():
         "of_early": core.interpret_of_early(early),
         "of_early_confirmation": core.of_early_confirmation(early),
         "of_micro": core.interpret_of_micro(of_micro),
+        "of_price_response": of_response.get("state"),
+        "validated_of": validated_of.get("direction") + " — " + validated_of.get("basis"),
+        "mp_of_price": mp_of_price.get("state"),
+        "flip": flip.get("state"),
     }
 
     return clean({
@@ -287,7 +305,9 @@ def build_state():
         "market":{
             "ticker":r.get("ticker"), "target":r.get("target"), "brti":r.get("btc"),
             "distance":r.get("distance"), "close_time":r.get("close_time"), "seconds_left":sec,
-            "source":r.get("source"), "quote_time":r.get("quote_time")
+            "source":r.get("source"), "quote_time":r.get("quote_time"),
+            "brti_feed":r.get("brti_feed"), "brti_age_s":feed.get("age_s"), "feed_mode":feed.get("mode"),
+            "next_ticker":feed.get("next_ticker"), "next_prefetched":feed.get("next_prefetched")
         },
         "chart":{
             "prediction":r.get("prediction"), "p_above":r.get("p_above"), "p_below":r.get("p_below"),
@@ -302,6 +322,10 @@ def build_state():
         "of_early":early,
         "of_micro":of_micro,
         "decision_fusion":fusion,
+        "of_price_response":of_response,
+        "validated_of":validated_of,
+        "mp_of_price":mp_of_price,
+        "flip":flip,
         "display":display,
         "orderflow":of,
         "structure":{
@@ -342,7 +366,7 @@ async def lifespan(app: FastAPI):
     MX_RUNNING=False
     engine.stop()
 
-app = FastAPI(title="BTC15M V2.8.1 / V10.23 Crypto.com Display Fix", lifespan=lifespan)
+app = FastAPI(title="BTC15M V2.10 / V10.26 Dynamic MP Lifecycle + Fast Feed + FLIP + OF Response", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
 
 @app.get("/", response_class=HTMLResponse)

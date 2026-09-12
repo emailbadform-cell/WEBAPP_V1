@@ -15,11 +15,12 @@
 </style>
 </head>
 <body><div class="wrap">
-<div class="top"><div><div class="brand">BTC15M DECISION TERMINAL</div><div class="sub">V2.8.1 web interface · BRTI + Chart + Decision + TR + MP + Order Flow + Multi-Exchange OF</div></div><div class="pill" id="status">Connecting…</div></div>
+<div class="top"><div><div class="brand">BTC15M DECISION TERMINAL</div><div class="sub">V2.11 · V10.27 · forward-validated OF + OF→price response + dynamic MP + TR + FLIP</div></div><div class="pill" id="status">Connecting…</div></div>
 <div class="error" id="error"></div>
 <div class="card hero">
 <div class="metric"><div class="k">Contract</div><div class="v small" id="ticker">—</div></div>
 <div class="metric"><div class="k">BRTI</div><div class="v cyan" id="brti">—</div></div>
+<div class="metric"><div class="k">BRTI Feed Age</div><div class="v small" id="brtiage">—</div></div>
 <div class="metric"><div class="k">Target</div><div class="v cyan" id="target">—</div></div>
 <div class="metric"><div class="k">Distance</div><div class="v" id="distance">—</div></div>
 <div class="metric"><div class="k">Time Left</div><div class="v cyan" id="timeleft">—</div></div>
@@ -57,6 +58,7 @@
 <div class="row"><span>Volatility travel</span><b id="trtravel">—</b></div>
 <div class="row"><span>OF target pressure</span><b id="trofstate">—</b></div>
 <div class="row"><span>Role</span><b id="trrole">—</b></div>
+<div class="row"><span>FLIP (reach → cross through)</span><b id="flipstate">—</b></div>
 </div></div></div>
 <div>
 
@@ -77,16 +79,22 @@
 </tbody>
 </table></div>
 <div class="row"><span>ORDER-FLOW CONSENSUS</span><b id="mof_consensus">—</b></div>
-<div class="footer">BRTI remains the price reference. No exchange spot prices shown. No recording. V2.8.1 · 5-venue OF. Directional display only. Raw MTF/TR/OF scores and 15m Sequence/BOS/CHOCH remain active underneath.</div>
+<div class="footer">BRTI remains the price reference. No exchange spot prices shown. No recording. V2.11 · forward-validated OF context + dynamic MP lifecycle + 5-venue raw OF. Directional display only. Raw MTF/TR/OF scores and 15m Sequence/BOS/CHOCH remain active underneath.</div>
 </div><div class="card section"><h2>Move Projection</h2><div class="rows">
 <div class="row"><span>Direction</span><b id="mpdir">—</b></div><div class="row"><span>Strength</span><b id="mpstrength">—</b></div>
+<div class="row"><span>Developing move</span><b id="mpdeveloping">—</b></div>
 <div class="row"><span>Near</span><b id="mpnear">—</b></div><div class="row"><span>Base</span><b id="mpbase">—</b></div>
 <div class="row"><span>Extended</span><b id="mpext">—</b></div><div class="row"><span>Exhaustion</span><b id="mpex">—</b></div>
 <div class="row"><span>Trade state</span><b id="mpaction">—</b></div><div class="row"><span>MP thesis</span><b id="mpthesis">—</b></div>
 <div class="row"><span>Progress</span><b id="mpprog">—</b></div><div class="row"><span>Remaining to base</span><b id="mprem">—</b></div>
+<div class="row"><span>Projection lifecycle</span><b id="mplifecycle">—</b></div><div class="row"><span>Completed legs</span><b id="mplegs">—</b></div>
 </div></div><div class="card section"><h2>OF / Decision Research</h2>
-<div class="row"><span>OF Early</span><b id="ofearly">—</b></div>
+<div class="row"><span>OF Early (research only)</span><b id="ofearly">—</b></div>
 <div class="row"><span>OF Micro (~10s)</span><b id="ofmicro">—</b></div>
+<div class="row"><span>Validated OF</span><b id="validatedof">—</b></div>
+<div class="row"><span>OF → Price Response</span><b id="ofresponse">—</b></div>
+<div class="row"><span>MP + OF price</span><b id="mpofprice">—</b></div>
+<div class="row"><span>Next contract</span><b id="nextcontract">—</b></div>
 <div class="row"><span>MP / OF relationship</span><b id="mpof">—</b></div>
 <div class="row"><span>MP action candidate</span><b id="mpofaction">—</b></div>
 <div class="row"><span>Decision fusion</span><b id="fusionstate">—</b></div>
@@ -186,7 +194,7 @@ $('lineBtn').addEventListener('click',()=>setChartMode('line'));
 async function refresh(){try{let d=await fetch('/api/state',{cache:'no-store'}).then(r=>r.json());$('status').textContent=d.status==='ok'?'LIVE':'CONNECTING';$('status').className='pill '+(d.status==='ok'?'up':'warn');if(d.status!=='ok'){ $('error').textContent=d.error||'Initializing…'; return } $('error').textContent=d.errors?.engine||d.errors?.orderflow||'';
 let m=d.market,c=d.chart,ds=d.decision,tr=d.reachability,mp=d.move_projection,s=d.structure,of=d.orderflow||{},mx=d.multi_exchange||{};
 let mof=d.multi_orderflow||{}, mv=mof.venues||{}, mc=mof.combined||{};
-let oe=d.of_early||{}, om=d.of_micro||{}, mo=d.mp_of_context||{}, fu=d.decision_fusion||{}, trof=d.target_of_context||{}, di=d.display||{};
+let oe=d.of_early||{}, om=d.of_micro||{}, mo=d.mp_of_context||{}, fu=d.decision_fusion||{}, trof=d.target_of_context||{}, di=d.display||{}, opr=d.of_price_response||{}, vof=d.validated_of||{}, mop=d.mp_of_price||{}, fl=d.flip||{};
 function setOF(prefix,v){
   v=v||{};
   const p=v.pressure||'—';
@@ -202,15 +210,15 @@ cls($('mof_consensus'),(mc.consensus||'').includes('BUY')?'ABOVE':((mc.consensus
 
 
 
-$('ticker').textContent=m.ticker;$('brti').textContent=money(m.brti);$('target').textContent=money(m.target);$('distance').textContent=money(m.distance);cls($('distance'),m.distance>=0?'ABOVE':'BELOW');let sec=Math.max(0,Math.floor(m.seconds_left));$('timeleft').textContent=String(Math.floor(sec/60)).padStart(2,'0')+':'+String(sec%60).padStart(2,'0');$('side').textContent=ds.current_side;cls($('side'),ds.current_side);
+$('ticker').textContent=m.ticker;$('brti').textContent=money(m.brti);$('brtiage').textContent=m.brti_age_s==null?'—':Number(m.brti_age_s).toFixed(1)+'s '+(m.brti_age_s<=2.5?'LIVE':'STALE');cls($('brtiage'),m.brti_age_s!=null&&m.brti_age_s<=2.5?'ABOVE':'BELOW');$('target').textContent=money(m.target);$('distance').textContent=money(m.distance);cls($('distance'),m.distance>=0?'ABOVE':'BELOW');let sec=Math.max(0,Math.floor(m.seconds_left));$('timeleft').textContent=String(Math.floor(sec/60)).padStart(2,'0')+':'+String(sec%60).padStart(2,'0');$('side').textContent=ds.current_side;cls($('side'),ds.current_side);
 $('prediction').textContent=c.prediction;cls($('prediction'),c.prediction);$('decision').textContent=ds.decision;cls($('decision'),ds.decision);$('pabove').textContent=pct(c.p_above);$('pbelow').textContent=pct(c.p_below);$('raw').textContent=pct(c.raw_p_above);$('role').textContent=ds.role;$('agree').textContent=ds.agree?'YES':'NO';cls($('agree'),ds.agree?'ABOVE':'NEUTRAL');
 [['t1',trend(s.m1_trend)],['t5',trend(s.m5_trend)],['t15',trend(s.m15_trend)]].forEach(([id,v])=>{$(id).textContent=v;cls($(id),v)});$('atr').textContent=money(s.atr1m_14);$('ph').textContent=money(s.protected_high);$('pl').textContent=money(s.protected_low);$('structure15').textContent=di.structure_15m||'NEUTRAL / NO STRUCTURAL BREAK';cls($('structure15'),(di.structure_15m||'').includes('BULLISH')?'ABOVE':((di.structure_15m||'').includes('BEARISH')?'BELOW':''));
-$('mpdir').textContent=mp.direction;cls($('mpdir'),mp.direction);$('mpstrength').textContent=mp.strength;cls($('mpstrength'),mp.strength);$('mpnear').textContent=money(mp.near);$('mpbase').textContent=money(mp.base);$('mpext').textContent=money(mp.extended);$('mpex').textContent=mp.exhaustion;cls($('mpex'),mp.exhaustion);$('mpaction').textContent=mp.action;cls($('mpaction'),mp.action);$('mpthesis').textContent=di.mp_thesis||'—';cls($('mpthesis'),(di.mp_thesis||'').includes('BULLISH')?'ABOVE':((di.mp_thesis||'').includes('BEARISH')?'BELOW':''));$('mpprog').textContent=mp.progress?mp.progress.progress_pct.toFixed(0)+'%':'—';$('mprem').textContent=mp.progress?money(mp.progress.remaining_to_base):'—';
-$('trstatus').textContent=tr.status;cls($('trstatus'),tr.status);$('trcross').textContent=pct(tr.cross_estimate);$('trraw').textContent=pct(tr.raw_cross_estimate);$('trtravel').textContent=money(tr.travel_budget);$('trrole').textContent=tr.role||'—';
+$('mpdir').textContent=mp.display_direction||mp.direction;cls($('mpdir'),mp.display_direction||mp.direction);$('mpdeveloping').textContent=mp.developing_state||'STRUCTURAL';cls($('mpdeveloping'),(mp.display_direction||mp.direction));$('mpstrength').textContent=mp.strength;cls($('mpstrength'),mp.strength);$('mpnear').textContent=money(mp.near);$('mpbase').textContent=money(mp.base);$('mpext').textContent=money(mp.extended);$('mpex').textContent=mp.exhaustion;cls($('mpex'),mp.exhaustion);$('mpaction').textContent=mp.action;cls($('mpaction'),mp.action);$('mpthesis').textContent=di.mp_thesis||'—';cls($('mpthesis'),(di.mp_thesis||'').includes('BULLISH')?'ABOVE':((di.mp_thesis||'').includes('BEARISH')?'BELOW':''));$('mpprog').textContent=mp.progress?mp.progress.progress_pct.toFixed(0)+'%':'—';$('mprem').textContent=mp.progress?money(mp.progress.remaining_to_base):'—';$('mplifecycle').textContent=mp.projection_status||'ACTIVE';cls($('mplifecycle'),(mp.projection_status||'').includes('ACHIEVED')?'ABOVE':'');$('mplegs').textContent=(mp.completed_legs??0)+' complete · leg '+(mp.projection_leg??1);
+$('trstatus').textContent=tr.status;cls($('trstatus'),tr.status);$('trcross').textContent=pct(tr.cross_estimate);$('trraw').textContent=pct(tr.raw_cross_estimate);$('trtravel').textContent=money(tr.travel_budget);$('trrole').textContent=tr.role||'—';$('flipstate').textContent=fl.state||'WAITING FOR TARGET';cls($('flipstate'),(fl.state||'').includes('CONFIRMED')?'ABOVE':(((fl.state||'').includes('WATCH')||(fl.state||'').includes('ARMED'))?'NEUTRAL':''));
 let trDisplay=(di.tr_of&&di.tr_of.display)||'NEUTRAL PRESSURE';
 $('trofstate').textContent=trDisplay;cls($('trofstate'),trDisplay.includes('BULLISH')?'ABOVE':(trDisplay.includes('BEARISH')?'BELOW':''));
 let earlyDisplay=(di.of_early_confirmation&&di.of_early_confirmation.state)||di.of_early||'NONE';$('ofearly').textContent=earlyDisplay;cls($('ofearly'),earlyDisplay.includes('BULLISH')?'ABOVE':(earlyDisplay.includes('BEARISH')?'BELOW':''));
-$('ofmicro').textContent=di.of_micro||'NEUTRAL PRESSURE';cls($('ofmicro'),(di.of_micro||'').includes('BULLISH')?'ABOVE':((di.of_micro||'').includes('BEARISH')?'BELOW':''));
+$('ofmicro').textContent=di.of_micro||'NEUTRAL PRESSURE';cls($('ofmicro'),(di.of_micro||'').includes('BULLISH')?'ABOVE':((di.of_micro||'').includes('BEARISH')?'BELOW':''));$('validatedof').textContent=(vof.direction||'NEUTRAL')+' — '+(vof.basis||'—');cls($('validatedof'),vof.direction==='BULLISH'?'ABOVE':(vof.direction==='BEARISH'?'BELOW':''));$('ofresponse').textContent=opr.state||'NEUTRAL';cls($('ofresponse'),(opr.state||'').includes('CONFIRMED')?'ABOVE':((opr.state||'').includes('FAILED')?'BELOW':''));$('mpofprice').textContent=mop.state||'NEUTRAL';cls($('mpofprice'),(mop.state||'').includes('CONTINUATION')?'ABOVE':((mop.state||'').includes('OPPOSING')?'BELOW':''));$('nextcontract').textContent=m.next_prefetched?(m.next_ticker||'PREFETCHED'):'SEARCHING / NOT YET LISTED';cls($('nextcontract'),m.next_prefetched?'ABOVE':'NEUTRAL');
 $('mpof').textContent=mo.relation||'NEUTRAL';cls($('mpof'),mo.relation==='SUPPORT'?'ABOVE':(mo.relation==='CONFLICT'?'BELOW':''));
 $('mpofaction').textContent=mo.action_candidate||mp.action||'—';cls($('mpofaction'),mo.action_candidate||'');
 $('fusionstate').textContent=fu.state||'—';cls($('fusionstate'),fu.state==='SUPPORTED'?'ABOVE':((fu.state||'').includes('CONFLICT')?'BELOW':''));
