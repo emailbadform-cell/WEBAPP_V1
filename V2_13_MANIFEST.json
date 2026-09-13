@@ -1,7 +1,0 @@
-{
-  "web_version": "V2.13",
-  "core_version": "V10.29",
-  "feature": "repeatable calibrated FLIP",
-  "flip_arm_distance_usd": 20.0,
-  "flip_tr_gate": 0.65
-}
