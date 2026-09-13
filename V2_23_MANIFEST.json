@@ -1,0 +1,22 @@
+{
+  "web_version": "V2.23",
+  "research_context": "V10.34",
+  "name": "$100 paper accounting + Session/Total Earnings + GT MTF rendering fixes",
+  "base_version": "V2.22 / V10.34",
+  "changes": [
+    "$100 paper stake per manual UP/DOWN entry",
+    "manual exit realizes at selected-side bid",
+    "expiry realizes at binary settlement value",
+    "Session Earnings resets on contract rollover",
+    "Total Earnings persists across contracts in browser localStorage",
+    "completed trade/session ledger persisted locally",
+    "GT projected candles are white with no chart text labels",
+    "GT Line begins at next candle slot",
+    "GT display carries across 1m/5m/10m/15m chart views"
+  ],
+  "manual_trade_places_orders": false,
+  "production_model_changes": false,
+  "research_model_changes": false,
+  "core_signal_logic_changed": false,
+  "server_credentials_included": false
+}
