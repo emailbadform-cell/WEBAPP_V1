@@ -1,0 +1,9 @@
+{
+  "web_version": "V2.19.1",
+  "core_version": "V10.32",
+  "research_context": "V10.33",
+  "changes": ["forward_signal_display", "ghost_thread", "ema_legend_colors", "brti_feed_age_top", "grouped_advanced_diagnostics"],
+  "forward_inputs": "BRTI-only; no Kalshi prices/target/current-side/Decision/TR/MP/OF",
+  "forward_models": "5s/10s FULL_PATH logistic; 30s/60s RETURNS logistic",
+  "ghost_thread": "direction/horizon/confidence visualization with uncertainty corridor; not exact-dollar forecast"
+}

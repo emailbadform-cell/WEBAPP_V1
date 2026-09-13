@@ -1,0 +1,14 @@
+{
+  "web_version": "V2.22",
+  "research_version": "V10.34",
+  "base_web": "V2.21/V10.34",
+  "changes": [
+    "BRTI age right-aligned with no LIVE text",
+    "manual UP/DOWN trade entry controls",
+    "single EXIT TRADE active-position control",
+    "right-side chart price scale",
+    "live BRTI chart price marker"
+  ],
+  "core_signal_logic_changed": false,
+  "server_credentials_included": false
+}
