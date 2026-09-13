@@ -1,0 +1,16 @@
+{
+  "web_version": "V2.19",
+  "research_version": "V10.33",
+  "base_web": "V2.18/V10.32",
+  "changes": [
+    "compact full-width candlestick chart layout",
+    "horizontal core signals",
+    "structure visible",
+    "combined OF consensus only",
+    "EMA chart-only display",
+    "manual TAKE/EXIT trade tracking",
+    "advanced diagnostics open/collapsible"
+  ],
+  "core_signal_logic_changed": false,
+  "server_credentials_included": false
+}

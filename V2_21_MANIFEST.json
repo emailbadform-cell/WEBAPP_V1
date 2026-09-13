@@ -1,0 +1,18 @@
+{
+  "web_version": "V2.21",
+  "research_context": "V10.34",
+  "name": "GT projected candles + multi-timeframe chart display",
+  "base_version": "V2.20 / V10.34",
+  "changes": [
+    "1m/5m/10m/15m display toggle",
+    "GT Candles/Line/Off toggle",
+    "projected active 1m candle completion",
+    "conditional Candle2 GT+1 preview",
+    "stateful GT direction anti-flicker",
+    "360-minute display-only candle payload"
+  ],
+  "candle3_active": false,
+  "projected_ohlc_exact_forecast": false,
+  "production_model_changes": false,
+  "unrelated_core_logic_changed": false
+}
