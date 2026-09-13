@@ -1,0 +1,17 @@
+{
+  "version": "V2.5",
+  "research_core": "V10.19",
+  "parent_web": "V2.4.1",
+  "logging": false,
+  "render_ready": true,
+  "health_check": "/api/health",
+  "features": [
+    "calibrated target reachability",
+    "OF target context",
+    "OF early detection",
+    "OF micro bias",
+    "MP/OF conflict context",
+    "decision fusion risk",
+    "multi-exchange normalized L2 OF"
+  ]
+}
