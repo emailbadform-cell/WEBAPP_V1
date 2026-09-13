@@ -1,9 +1,0 @@
-__pycache__/
-*.pyc
-*.pem
-.env
-.env.*
-v10_live_research_log.csv
-
-*.key
-RESEARCH_DATA/raw/L2_RAW/*.ndjson
