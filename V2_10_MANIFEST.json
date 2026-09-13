@@ -1,8 +1,0 @@
-{
-  "version": "V2.10",
-  "core": "V10.26",
-  "parent": "V2.9",
-  "feature": "Dynamic MP projection lifecycle",
-  "web_logging": false,
-  "deployment": "full package replacement"
-}
