@@ -1,0 +1,8 @@
+{
+  "version": "V2.4",
+  "parent": "V2.3",
+  "standalone_coinbase_panel": false,
+  "multi_exchange_panel": true,
+  "logging": false,
+  "prediction_logic_changed": false
+}

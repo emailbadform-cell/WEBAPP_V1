@@ -1,0 +1,18 @@
+{
+  "web_version": "V2.22",
+  "research_context": "V10.34",
+  "name": "Manual UP/DOWN trade controls + BRTI age layout + chart price axis",
+  "base_version": "V2.21 / V10.34",
+  "changes": [
+    "BRTI age moved to right edge; LIVE/STALE word removed",
+    "separate TAKE TRADE UP and TAKE TRADE DOWN controls",
+    "single EXIT TRADE control while a manual position is active",
+    "entry controls automatically return after exit",
+    "right-side chart price axis",
+    "live BRTI price marker on chart"
+  ],
+  "manual_trade_places_orders": false,
+  "production_model_changes": false,
+  "research_model_changes": false,
+  "unrelated_core_logic_changed": false
+}
