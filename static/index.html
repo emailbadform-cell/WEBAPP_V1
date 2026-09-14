@@ -10,7 +10,7 @@
 </style>
 </head>
 <body><div class="wrap">
-<div class="top"><div><div class="brand">BTC15M DECISION TERMINAL</div><div class="sub">V2.26.0 · V10.37 research · fast initialization + GT 1m direction tile + earnings reset</div></div><div class="pill" id="status">Connecting…</div></div>
+<div class="top"><div><div class="brand">BTC15M DECISION TERMINAL</div><div class="sub">V2.26.1 · V10.37 research · fast initialization + GT 1m direction tile + earnings reset</div></div><div class="pill" id="status">Connecting…</div></div>
 <div class="error" id="error"></div>
 <div class="card hero section">
  <div class="metric"><div class="k">Contract</div><div class="v small" id="ticker">—</div></div>
@@ -156,6 +156,31 @@ let earningsState=JSON.parse(localStorage.getItem('btc15m_earnings_v223')||'null
 earningsState.sessionEarnings=Number(earningsState.sessionEarnings||0);earningsState.totalEarnings=Number(earningsState.totalEarnings||0);earningsState.trades=Array.isArray(earningsState.trades)?earningsState.trades:[];earningsState.sessions=Array.isArray(earningsState.sessions)?earningsState.sessions:[];
 let refreshBusy=false;
 let refreshFailures=0;
+let lastTradeEventUpdateAt=0;
+function tradeSnapshot(d){
+  const m=d&&d.market||{},em=d&&d.execution_market||{},ds=d&&d.decision||{},fw=d&&d.forward_signal||{},tr=d&&d.target_reach||{},mp=d&&d.move_projection||{},fl=d&&d.flip||{},xr=d&&d.exhaustion_reversal||{},an=d&&d.anticipation||{},st=d&&d.settlement||{};
+  return {ticker:m.ticker,brti:m.brti,target:m.target,seconds_left:m.seconds_left,yes_bid:em.yes_bid,yes_ask:em.yes_ask,no_bid:em.no_bid,no_ask:em.no_ask,
+    decision:ds.decision,decision_confidence:ds.confidence,forward_state:fw.state,forward_horizon_s:fw.horizon_s,tr_cross_estimate:tr.cross_estimate,
+    mp_direction:mp.display_direction||mp.direction,mp_action:mp.action,flip_state:fl.state,flip_count:fl.flip_count,reversal:xr.reversal,exhaustion_score:xr.score,
+    anticipation_direction:an.direction,anticipation_confidence:an.confidence,settlement_prediction:st.prediction,settlement_confidence:st.confidence,settlement_checkpoint_s:st.checkpoint_s};
+}
+async function postTradeEvent(eventType,trade,d,extra){
+  try{
+    const payload={event_type:eventType,client_ts_ms:Date.now(),trade_id:trade&&trade.tradeId||null,side:trade&&trade.side||null,entry:trade&&trade.entry||null,
+      stake:trade&&trade.stake||PAPER_STAKE,context:tradeSnapshot(d),...(extra||{})};
+    await fetch('/api/trade-event',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),cache:'no-store'});
+  }catch(_e){}
+}
+function maybeLogTradeUpdate(d){
+  if(!manualTrade)return;const now=Date.now();if(now-lastTradeEventUpdateAt<900)return;lastTradeEventUpdateAt=now;
+  const em=d&&d.execution_market||{},b=sideBook(manualTrade.side,em),bid=Number(b.bid);if(Number.isFinite(bid)){manualTrade.peakBid=Math.max(Number(manualTrade.peakBid||bid),bid);manualTrade.troughBid=Math.min(Number(manualTrade.troughBid==null?bid:manualTrade.troughBid),bid);}
+  postTradeEvent('UPDATE',manualTrade,d,{current_bid:Number.isFinite(bid)?bid:null,peak_bid:manualTrade.peakBid,trough_bid:manualTrade.troughBid,
+    mfe:Number.isFinite(bid)?Number(manualTrade.peakBid)-Number(manualTrade.entry):null,mae:Number.isFinite(bid)?Number(manualTrade.entry)-Number(manualTrade.troughBid):null});
+}
+function schedulePostExit(rec){
+  if(!rec)return;for(const sec of [5,10,30,60,120])setTimeout(()=>{const d=window.__lastState;if(!d||d.status!=='ok')return;const m=d.market||{};if(m.ticker!==rec.ticker)return;
+    postTradeEvent('POST_EXIT',{tradeId:rec.tradeId,side:rec.side,entry:rec.entry,stake:rec.stake},d,{horizon_s:sec,exit:rec.exit,pnl:rec.pnl,reason:rec.reason});},sec*1000);
+}
 function persistManualTrade(){localStorage.setItem('btc15m_manual_trade_v219',JSON.stringify(manualTrade));localStorage.setItem('btc15m_manual_exit_v219',JSON.stringify(lastManualExit));localStorage.setItem('btc15m_earnings_v223',JSON.stringify(earningsState));}
 function earningsMoney(v){v=Number(v||0);const a=Math.abs(v).toFixed(2);return v>0?'+$'+a:(v<0?'-$'+a:'$0.00');}
 function updateEarningsDisplay(){const se=$('sessionearnings'),te=$('totalearnings');if(se){se.textContent=earningsMoney(earningsState.sessionEarnings);cls(se,earningsState.sessionEarnings>0?'ABOVE':(earningsState.sessionEarnings<0?'BELOW':'NEUTRAL'));}if(te){te.textContent=earningsMoney(earningsState.totalEarnings);cls(te,earningsState.totalEarnings>0?'ABOVE':(earningsState.totalEarnings<0?'BELOW':'NEUTRAL'));}}
@@ -164,7 +189,7 @@ const resetTotalEarningsBtn=$('resetTotalEarnings');if(resetTotalEarningsBtn)res
 function updateTradePnl(pnl,caption){const el=$('tradeLivePnl'),cap=$('tradePnlCaption');if(!el)return;el.className='';if(pnl==null||!Number.isFinite(Number(pnl))){el.textContent='—';el.classList.add('muted');}else{const n=Number(pnl);el.textContent=earningsMoney(n);el.classList.add(n>0?'up':(n<0?'down':'muted'));}if(cap)cap.textContent=caption||'LIVE P/L';}
 function updateTradeButton(){const wrap=$('tradeControls');if(!wrap)return;const active=!!manualTrade;if(active){wrap.innerHTML='<button class="tradebtn exitbtn" id="tradeExit" type="button">■ EXIT TRADE</button>';const ex=$('tradeExit');if(ex)ex.onclick=exitManualTrade;$('tradeHint').textContent='$100 '+manualTrade.side+' paper position · exit manually or hold to settlement.';$('tradeTrackState').textContent='ACTIVE · '+manualTrade.side+' · $100';cls($('tradeTrackState'),manualTrade.side);}else{wrap.innerHTML='<button class="tradebtn upbtn" id="tradeUp" type="button">↑ TAKE TRADE UP · $100</button><button class="tradebtn downbtn" id="tradeDown" type="button">↓ TAKE TRADE DOWN · $100</button>';const up=$('tradeUp'),dn=$('tradeDown');if(up)up.onclick=()=>armManualTrade('ABOVE');if(dn)dn.onclick=()=>armManualTrade('BELOW');$('tradeHint').textContent='Each entry is a $100 paper position. Choose UP (Yes/Above) or DOWN (No/Below).';$('tradeTrackState').textContent='NO ACTIVE TRADE';cls($('tradeTrackState'),'NEUTRAL');if(lastManualExit&&Number.isFinite(Number(lastManualExit.pnl)))updateTradePnl(Number(lastManualExit.pnl),'LAST REALIZED P/L');else updateTradePnl(null,'LIVE P/L');}updateEarningsDisplay();}
 function recordCompletedSession(ticker,value){if(!ticker)return;earningsState.sessions.push({ticker,earnings:Number(value||0),closedAt:Date.now()});earningsState.sessions=earningsState.sessions.slice(-500);}
-function finalizePaperTrade(exitPrice,reason,d){if(!manualTrade)return null;const xp=Number(exitPrice);if(!Number.isFinite(xp)||xp<0||xp>1)return null;const qty=Number(manualTrade.quantity||PAPER_STAKE/Number(manualTrade.entry));const pnl=qty*(xp-Number(manualTrade.entry));const rec={ticker:manualTrade.ticker,side:manualTrade.side,stake:PAPER_STAKE,entry:Number(manualTrade.entry),exit:xp,quantity:qty,pnl,reason,enteredAt:manualTrade.armedAt,exitedAt:Date.now()};earningsState.sessionEarnings+=pnl;earningsState.totalEarnings+=pnl;earningsState.trades.push(rec);earningsState.trades=earningsState.trades.slice(-1000);lastManualExit={state:'TRADE EXITED — '+reason,signal:'—',stats:earningsMoney(pnl),ref:manualTrade.side+' '+cents(manualTrade.entry)+' → '+cents(xp),...rec};manualTrade=null;persistManualTrade();updateTradeButton();return rec;}
+function finalizePaperTrade(exitPrice,reason,d){if(!manualTrade)return null;const exiting={...manualTrade};const xp=Number(exitPrice);if(!Number.isFinite(xp)||xp<0||xp>1)return null;const qty=Number(exiting.quantity||PAPER_STAKE/Number(exiting.entry));const pnl=qty*(xp-Number(exiting.entry));const rec={tradeId:exiting.tradeId,ticker:exiting.ticker,side:exiting.side,stake:PAPER_STAKE,entry:Number(exiting.entry),exit:xp,quantity:qty,pnl,reason,enteredAt:exiting.armedAt,exitedAt:Date.now(),peakBid:Number(exiting.peakBid),troughBid:Number(exiting.troughBid)};earningsState.sessionEarnings+=pnl;earningsState.totalEarnings+=pnl;earningsState.trades.push(rec);earningsState.trades=earningsState.trades.slice(-1000);lastManualExit={state:'TRADE EXITED — '+reason,signal:'—',stats:earningsMoney(pnl),ref:exiting.side+' '+cents(exiting.entry)+' → '+cents(xp),...rec};postTradeEvent('EXIT',exiting,d,{exit:xp,pnl,reason,peak_bid:exiting.peakBid,trough_bid:exiting.troughBid,mfe:Number(exiting.peakBid)-Number(exiting.entry),mae:Number(exiting.entry)-Number(exiting.troughBid)});schedulePostExit(rec);manualTrade=null;persistManualTrade();updateTradeButton();return rec;}
 function settlePriceForTrade(trade,brti,target){if(!trade||!Number.isFinite(Number(brti))||!Number.isFinite(Number(target)))return null;const above=Number(brti)>=Number(target);const wins=trade.side==='ABOVE'?above:!above;return wins?1:0;}
 function syncPaperSession(d){const m=d&&d.market||{},ticker=m.ticker;if(!ticker)return;if(manualTrade&&manualTrade.ticker===ticker){if(Number.isFinite(Number(m.brti)))manualTrade.lastBrti=Number(m.brti);if(Number.isFinite(Number(m.target)))manualTrade.target=Number(m.target);manualTrade.lastSecondsLeft=Number(m.seconds_left);persistManualTrade();if(Number(m.seconds_left)<=0){const sp=settlePriceForTrade(manualTrade,m.brti,m.target);if(sp!=null)finalizePaperTrade(sp,'EXPIRY',d);}}
 if(manualTrade&&manualTrade.ticker!==ticker){const sp=settlePriceForTrade(manualTrade,manualTrade.lastBrti,manualTrade.target);if(sp!=null)finalizePaperTrade(sp,'EXPIRY / ROLLOVER',d);}
@@ -410,7 +435,7 @@ function renderMpProgress(m,mp){
 async function refresh(){if(refreshBusy)return;refreshBusy=true;try{let d=await fetchJSON('/api/state',3);refreshFailures=0;$('status').textContent=d.status==='ok'?'LIVE':'CONNECTING';$('status').className='pill '+(d.status==='ok'?'up':'warn');if(d.status!=='ok'){ $('error').textContent=d.error||'Initializing…'; return } $('error').textContent=d.errors?.engine||d.errors?.orderflow||'';
 let m=d.market,c=d.chart,ds=d.decision,tr=d.reachability,mp=d.move_projection,s=d.structure,of=d.orderflow||{},mx=d.multi_exchange||{},fw=d.forward_signal||{},l2=d.l2||{},gt=d.ghost_thread||{};
 let mof=d.multi_orderflow||{}, mv=mof.venues||{}, mc=mof.combined||{};
-syncPaperSession(d);
+syncPaperSession(d);maybeLogTradeUpdate(d);
 let oe=d.of_early||{}, om=d.of_micro||{}, mo=d.mp_of_context||{}, fu=d.decision_fusion||{}, trof=d.target_of_context||{}, di=d.display||{}, opr=d.of_price_response||{}, vof=d.validated_of||{}, mop=d.mp_of_price||{}, fl=d.flip||{}, sp=d.settlement_protection||{}, hz=d.target_cross_hazard||{}, pr=d.profit_reversal_risk||{};
 $('mof_consensus').textContent=mc.consensus||'—';
 cls($('mof_consensus'),(mc.consensus||'').includes('BUY')?'ABOVE':((mc.consensus||'').includes('SELL')?'BELOW':''));
@@ -486,9 +511,9 @@ function armManualTrade(side){
   const m=d.market||{}, em=d.execution_market||{}, fl=d.flip||{};
   const b=sideBook(side,em), entry=Number(b.ask), bid=Number(b.bid);
   if(!Number.isFinite(entry)||entry<=0||entry>=1){$('tradeTrackState').textContent='CANNOT ARM — NO '+side+' ASK';cls($('tradeTrackState'),'NEUTRAL');return;}
-  manualTrade={ticker:m.ticker,side,stake:PAPER_STAKE,entry,quantity:PAPER_STAKE/entry,peakBid:Number.isFinite(bid)?bid:entry,armedAt:Date.now(),flipCountStart:Number(fl.flip_count||0),decisionStart:(d.decision||{}).decision||null,target:Number(m.target),lastBrti:Number(m.brti),lastSecondsLeft:Number(m.seconds_left)};
+  manualTrade={tradeId:(globalThis.crypto&&crypto.randomUUID)?crypto.randomUUID():(m.ticker+'-'+Date.now()),ticker:m.ticker,side,stake:PAPER_STAKE,entry,quantity:PAPER_STAKE/entry,peakBid:Number.isFinite(bid)?bid:entry,troughBid:Number.isFinite(bid)?bid:entry,armedAt:Date.now(),flipCountStart:Number(fl.flip_count||0),decisionStart:(d.decision||{}).decision||null,target:Number(m.target),lastBrti:Number(m.brti),lastSecondsLeft:Number(m.seconds_left)};
   if(earningsState.sessionTicker!==m.ticker){if(earningsState.sessionTicker)recordCompletedSession(earningsState.sessionTicker,earningsState.sessionEarnings);earningsState.sessionTicker=m.ticker;earningsState.sessionEarnings=0;}
-  persistManualTrade();updateTradeButton();
+  persistManualTrade();postTradeEvent('ENTRY',manualTrade,d,{entry_ask:entry,entry_bid:Number.isFinite(bid)?bid:null});updateTradeButton();
 }
 updateTradeButton();
 

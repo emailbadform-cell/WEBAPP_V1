@@ -497,7 +497,7 @@ def build_state():
     }
 
     return clean({
-        "status":"ok","version":"V2.26.0 / V10.37",
+        "status":"ok","version":"V2.26.1 / V10.37",
         "server_time":now,
         "market":{
             "ticker":r.get("ticker"), "target":r.get("target"), "brti":r.get("btc"),
@@ -588,8 +588,34 @@ async def lifespan(app: FastAPI):
     L2.stop()
     engine.stop()
 
-app = FastAPI(title="BTC15M V2.26.0 / V10.37 Ghost + L2 + Predictive Decision", lifespan=lifespan)
+app = FastAPI(title="BTC15M V2.26.1 / V10.37 Ghost + L2 + Predictive Decision", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=Path(__file__).with_name("static")), name="static")
+
+# V2.26.1 runtime hardening + paper-trade lifecycle persistence.
+TRADE_EVENT_LOG_PATH = Path(os.getenv("TRADE_EVENT_LOG_PATH", "/tmp/btc15m_trade_events.ndjson"))
+TRADE_EVENT_LOCK = threading.Lock()
+
+def _engine_history_rows():
+    """Return history length without evaluating a pandas DataFrame as boolean."""
+    try:
+        ticks = getattr(engine, "ticks", None) if engine is not None else None
+        return int(len(ticks)) if ticks is not None else 0
+    except Exception:
+        return 0
+
+def _append_trade_event(payload: dict):
+    if not isinstance(payload, dict):
+        raise ValueError("trade event must be a JSON object")
+    rec = dict(payload)
+    rec.setdefault("server_received_utc", datetime.now(timezone.utc).isoformat())
+    raw = json.dumps(rec, separators=(",", ":"), ensure_ascii=False)
+    if len(raw.encode("utf-8")) > 131072:
+        raise ValueError("trade event too large")
+    TRADE_EVENT_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with TRADE_EVENT_LOCK:
+        with TRADE_EVENT_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(raw + "\n")
+    return rec
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -622,7 +648,7 @@ def state():
     warm={"status":"starting","ok":False,"error":cache_error or "state_cache_warming"}
     try:
         warm["history_ready"]=bool(getattr(engine,"history_ready",False)) if engine is not None else False
-        warm["history_rows"]=int(len(getattr(engine,"ticks",[]) or [])) if engine is not None else 0
+        warm["history_rows"]=_engine_history_rows()
         warm["model_ready"]=bool(warm["history_ready"] and warm["history_rows"]>=45)
     except Exception:
         pass
@@ -646,13 +672,39 @@ def health():
     return JSONResponse({
         "ok":True,
         "service":"alive",
-        "version":"V2.26.0 / V10.37",
+        "version":"V2.26.1 / V10.37",
         "data_status":data_status,
         "cache_age_s":age,
         "cache_error":err,
         "history_ready":bool(getattr(engine,"history_ready",False)) if engine is not None else False,
-        "history_rows":int(len(getattr(engine,"ticks",[]) or [])) if engine is not None and getattr(engine,"ticks",None) is not None else 0
+        "history_rows":_engine_history_rows()
     }, status_code=200, headers={"Cache-Control":"no-store"})
+
+@app.post("/api/trade-event")
+async def trade_event(request: Request):
+    try:
+        payload = await request.json()
+        rec = _append_trade_event(payload)
+        return JSONResponse({"ok":True,"status":"recorded","event_type":rec.get("event_type"),"trade_id":rec.get("trade_id")}, headers={"Cache-Control":"no-store"})
+    except Exception as exc:
+        return JSONResponse({"ok":False,"status":"error","error":"trade_event_write_failed","detail":str(exc)}, status_code=400, headers={"Cache-Control":"no-store"})
+
+@app.get("/api/trade-events/status")
+def trade_events_status():
+    try:
+        exists=TRADE_EVENT_LOG_PATH.exists()
+        size=TRADE_EVENT_LOG_PATH.stat().st_size if exists else 0
+        lines=0
+        if exists and size <= 20_000_000:
+            with TRADE_EVENT_LOG_PATH.open("r",encoding="utf-8") as f:
+                for _ in f: lines += 1
+        return JSONResponse({
+            "ok":True,"enabled":True,"exists":exists,"bytes":size,"events":lines if exists and size<=20_000_000 else None,
+            "path":str(TRADE_EVENT_LOG_PATH),
+            "durability":"runtime filesystem; set TRADE_EVENT_LOG_PATH to a mounted persistent volume for deploy-surviving storage"
+        }, headers={"Cache-Control":"no-store"})
+    except Exception as exc:
+        return JSONResponse({"ok":False,"enabled":True,"error":str(exc)}, status_code=500, headers={"Cache-Control":"no-store"})
 
 @app.exception_handler(Exception)
 async def api_json_exception_handler(request: Request, exc: Exception):
