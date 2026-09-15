@@ -1,4 +1,0 @@
-dataset,cycles_evaluated,qualifying_signals,successful_reflips,failures,observed_accuracy
-development_v10_23,137,53,53,0,1.0
-forward_v10_27,64,13,13,0,1.0
-combined,201,66,66,0,1.0
