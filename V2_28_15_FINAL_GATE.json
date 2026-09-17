@@ -1,0 +1,35 @@
+{
+  "version": "V2.28.15",
+  "base": "V2.28.14",
+  "python_ast": {
+    "advanced_signals.py": "PASS",
+    "live_btc15m_predictor.py": "PASS",
+    "app.py": "PASS",
+    "settlement_engine.py": "PASS"
+  },
+  "rollover_semantics": {
+    "prefetch_300s": true,
+    "direct_retry_500ms": true,
+    "prefetch_atomic_switch": true,
+    "postclose_direct_350ms": true,
+    "postclose_broad_500ms": true,
+    "ticker_response_telemetry": true,
+    "target_availability_telemetry": true,
+    "target_required_before_ready": true,
+    "state_reset_on_switch": true
+  },
+  "preserved_web": {
+    "brti_sse": true,
+    "client_telemetry": true,
+    "api_state": true,
+    "doctype": true,
+    "ghost_thread": true
+  },
+  "unchanged_authority_regions": {
+    "predictive_decision": true,
+    "settlement_confirmation": true,
+    "gt_recursive": true
+  },
+  "live_availability_timing": "requires deployed sessions; instrumentation now records it",
+  "production_authority_changes": false
+}
