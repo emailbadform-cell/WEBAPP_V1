@@ -1,0 +1,23 @@
+{
+  "version": "V2.28.18 / V10.39.8",
+  "status": "PASS_WITH_LIVE_AUTH_BLOCKED",
+  "tests": {
+    "python_compile": "PASS",
+    "browser_javascript_syntax": "PASS",
+    "web_import": "PASS",
+    "synthetic_orderbook_snapshot_delta": "PASS",
+    "sequence_gap_detection": "PASS",
+    "auto_paper_v1_policy_preserved": "PASS",
+    "prediction_core_web_byte_identical_to_v2_28_17": "PASS",
+    "package_checksums": "PASS",
+    "credential_file_scan": "PASS",
+    "live_kalshi_ws_handshake": "BLOCKED_NO_CREDENTIALS_IN_TEST_ENV"
+  },
+  "architecture": {
+    "kalshi_ws": "PRIMARY_EXECUTION_DOMAIN",
+    "rest": "RECOVERY_FALLBACK",
+    "browser_state": "SSE_PRIMARY_5S_REST_WATCHDOG",
+    "current_and_next_prefetch": true,
+    "prediction_authority_changed": false
+  }
+}
