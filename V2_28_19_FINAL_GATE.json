@@ -1,0 +1,18 @@
+{
+  "version": "V2.28.19",
+  "research_companion": "V10.39.9",
+  "built_utc": "2026-09-17T13:48:07.162330+00:00",
+  "tests": {
+    "python_compile": "PASS",
+    "browser_js_syntax": "PASS",
+    "server_auto_entry_exit": "PASS",
+    "manual_auto_isolation": "PASS",
+    "kalshi_sid_interleave": "PASS",
+    "kalshi_sequence_gap_detection": "PASS",
+    "prediction_core_byte_identical_to_v2_28_18": "PASS",
+    "credential_scan": "PASS"
+  },
+  "authority_change": false,
+  "auto_paper_owner": "SERVER",
+  "auto_paper_policy": "AUTO_PAPER_V1_FROZEN_2026_09_16"
+}
