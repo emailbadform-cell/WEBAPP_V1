@@ -1,8 +1,0 @@
-{
-  "version": "V2.28.14",
-  "kind": "web",
-  "created_utc": "2026-09-16T02:03:23.546674+00:00",
-  "authority_changes": false,
-  "purpose": "prospective instrumentation and BRTI display-latency collection",
-  "files": 112
-}
