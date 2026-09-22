@@ -1,0 +1,27 @@
+{
+  "candidate": "V2.28.15 rollover engineering candidate",
+  "atomic_coordinator_tests": "",
+  "test_returncode": 1,
+  "syntax": {
+    "advanced_signals.py": "PASS",
+    "live_btc15m_predictor.py": "PASS",
+    "atomic_rollover.py": "PASS",
+    "app.py": "PASS",
+    "settlement_engine.py": "PASS",
+    "test_atomic_rollover.py": "PASS"
+  },
+  "prefetch_lead_s": 300,
+  "targeted_retry_s": 0.25,
+  "live_authority_wired": false,
+  "reason": "Existing live fetch/promotion methods require semantic integration audit; no unsafe blind replacement.",
+  "scenarios_tested": [
+    "prefetch before close",
+    "ticker before target",
+    "target becomes ready",
+    "no early promotion",
+    "atomic promotion at expiry",
+    "late target",
+    "mixed-contract prevention",
+    "repeated consecutive rollovers"
+  ]
+}
