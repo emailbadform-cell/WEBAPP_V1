@@ -22,4 +22,19 @@ def observe(d):
         with _lock:
             p=Path(dest);p.parent.mkdir(parents=True,exist_ok=True)
             with p.open('a',encoding='utf-8') as f:f.write(json.dumps(row,allow_nan=False)+'\n');f.flush();os.fsync(f.fileno())
+
+    print(
+        "WEB_OPTIONS_STATUS",
+        json.dumps({
+            "event": "observation_processed",
+            "ticker": m.get("ticker"),
+            "iv_available": iv is not None,
+            "iv_venue": iv.get("venue") if isinstance(iv, dict) else None,
+            "iv_source_time": iv.get("source_time") if isinstance(iv, dict) else None,
+            "result": row.get("status"),
+            "gamma_zone": row["gamma_zone"],
+            "journal_configured": bool(dest)
+        }),
+        flush=True
+    )
     return row
