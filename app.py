@@ -1599,7 +1599,7 @@ def rdfz_download_plan():
                         headers={"Cache-Control":"no-store"})
 
 @app.get("/api/rdfz/raw-file")
-def rdfz_raw_file(name: str, bytes: int = -1):
+def rdfz_raw_file(name: str, bytes: int = -1, offset: int = 0):
     """Low-overhead direct file stream. Never compresses or creates a temporary archive."""
     p=_safe_rdfz_name(name)
     if p is None or not p.exists() or not p.is_file() or p.parent.resolve()!=RDFZ_DIR.resolve():
@@ -1608,9 +1608,12 @@ def rdfz_raw_file(name: str, bytes: int = -1):
     except OSError:
         return JSONResponse({"ok":False,"error":"rdfz_file_unavailable"},status_code=409,headers={"Cache-Control":"no-store"})
     limit=current if bytes < 0 else max(0,min(int(bytes),current))
+    if offset < 0 or offset > limit:
+        return JSONResponse({"ok":False,"error":"invalid_offset"},status_code=416)
     def stream():
-        remaining=limit
+        remaining=limit-offset
         with p.open("rb") as src:
+            src.seek(offset)
             while remaining>0:
                 chunk=src.read(min(256*1024,remaining))
                 if not chunk: break
@@ -1619,7 +1622,7 @@ def rdfz_raw_file(name: str, bytes: int = -1):
                 # Cooperative yield so live market/WS/API work stays responsive.
                 time.sleep(0)
     headers={"Cache-Control":"no-store","Content-Disposition":f'attachment; filename="{p.name}"',
-             "Content-Length":str(limit),"X-RDFZ-Mode":"direct-raw-frozen-boundary"}
+             "Content-Length":str(limit-offset),"X-RDFZ-Offset":str(offset),"X-RDFZ-Mode":"direct-raw-frozen-boundary"}
     return StreamingResponse(stream(),media_type="application/octet-stream",headers=headers)
 
 # Compatibility endpoint: no ZIP is built. It returns the direct-download plan as JSON.
